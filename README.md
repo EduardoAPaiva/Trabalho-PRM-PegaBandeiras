@@ -57,10 +57,10 @@ Abra **três terminais** e siga os passos abaixo.
 
 ### Terminal 1 – Inicialização do Ambiente
 
-Navegue até a pasta do workspace:
+Navegue até a pasta src do workspace:
 
 ```bash
-cd ~/seu_workspace
+cd ~/seu_workspace/src
 ```
 
 Compile o pacote usando o comando:
