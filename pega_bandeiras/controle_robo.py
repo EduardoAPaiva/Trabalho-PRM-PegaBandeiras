@@ -4,6 +4,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan, Imu, Image
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float64MultiArray
 
 from scipy.spatial.transform import Rotation as R
 
@@ -19,6 +20,17 @@ class ESTADOS(Enum):
     INDO_PARA_BANDEIRA = 3
     POSICIONANDO_NA_BANDEIRA = 4
     DESVIANDO = 5
+    ABRINDO_GARRA = 6
+    PEGANDO_BANDEIRA = 7
+    FECHANDO_GARRA = 8
+    VOLTANDO_PARA_BASE = 9
+    LEVANTANDO_GARRA = 10
+    DESVIANDO_VOLTANDO_PARA_BASE = 11
+    PARADO = 12
+    ABAIXANDO_GARRA = 13
+    ABRINDO_GARRA_FINAL = 14
+    DANDO_RE = 15
+    FECHANDO_GARRA_FINAL = 16
 
 
 class ControleRobo(Node):
@@ -29,10 +41,17 @@ class ControleRobo(Node):
         # Publisher para comando de velocidade
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
+        # Publisher para comando da garra
+        self.gripper_pub = self.create_publisher(
+            Float64MultiArray,
+            '/gripper_controller/commands',
+            10
+        )
+
         # Subscribers
         self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.create_subscription(Imu, '/imu', self.imu_callback, 10)
-        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.create_subscription(Odometry, '/odom_gt', self.odom_callback, 10)
         self.create_subscription(
             Image, '/robot_cam/colored_map', self.camera_callback, 10)
 
@@ -51,14 +70,15 @@ class ControleRobo(Node):
         self.direcao_explorando = 0                 # Define a direcao para a qual esta desviano no momento para o estado EXPLORANDO
         self.direcao_obstaculo = 0                  # 1 -> direita e -1 -> esquerda
         self.percentual_bandeira = -1               # Diz a porcentagem que a bandeira ocupa na camera
-        self.menor_distancia_esquerda = -1          # Angulo da menor distancia a frente esquerda
+        self.menor_distancia_frente_esquerda = -1   # Angulo da menor distancia a frente esquerda
         self.menor_distancia_esquerda = -1          # Angulo da menor distancia a esquerda
-        self.menor_distancia_direita = -1           # Angulo da menor distancia a frente direita
+        self.menor_distancia_frente_direita = -1    # Angulo da menor distancia a frente direita
         self.menor_distancia_direita = -1           # Angulo da menor distancia a direita
         self.bandeira_a_frente = False              # Vira true quando a bandeira esta no centro da camera
         self.estado_atual = ESTADOS.EXPLORANDO      # Estado atual do robo na maquina de estados
         self.chegou_na_bandeira = False             # Vira true quando uma certa portagem da bandeira ocupa a tela
         self.giro_desvio = 0                        # Define se o robo esta girando para desvio de algum obstaculo
+        self.val_menor_distancia_lados = -1
 
         self.const_dist_obstaculo = 0.8             # Constante que define a distancia minima para um obstaculo
 
@@ -69,6 +89,13 @@ class ControleRobo(Node):
         self.centro_x = -1                          # Centro horizontal da imagem (tamanho horizontal dividido por 2)
         self.dx = 20                                # Tolerancia em pixels para considerar a bandeira no centro da imagem
         self.dx_mastro = 3                          # Tolerancia em pixels para considerar o mastro da bandeira no centro da imagem
+
+        self.contador_garra = -1
+        self.bandeira_coletada = 0
+
+        self.base_x = 0
+        self.base_y = 0
+        self.base_salvada = False
 
     # FUNCAO QUE RECEBE OS DADOS DO LIDAR
     def scan_callback(self, msg: LaserScan):
@@ -86,64 +113,68 @@ class ControleRobo(Node):
         distancias_frente_direita = [msg.ranges[i] for i in indices_frente_direita]     # Distancias para ate 30° a direita
 
         #Loop que calcula o angulo da menor distancia a esquerda
-        dist_esq = msg.ranges[0]
-        self.menor_distancia_esquerda = 0
-        for i in range(1,120):
-            if msg.ranges[i] < dist_esq:
-                dist_esq = msg.ranges[i]
-                self.menor_distancia_esquerda = i
-        
+        dist_ladoesq = 100000
+        self.menor_distancia_esquerda = -1
+        for i in range(0 + self.bandeira_coletada,120):
+            if msg.ranges[i] < dist_ladoesq:
+                dist_ladoesq = msg.ranges[i]
+                self.menor_distancia_esquerda = i  
+
         #Loop que calcula a menor distancia a direita
-        dist_dir = msg.ranges[240]
-        self.menor_distancia_direita = 240
-        for i in range(240,360):
-            if msg.ranges[i] < dist_dir:
-                dist_dir = msg.ranges[i]
+        dist_ladodir = 100000
+        self.menor_distancia_direita = -1
+        for i in range(240,360 - self.bandeira_coletada):
+            if msg.ranges[i] < dist_ladodir:
+                dist_ladodir = msg.ranges[i]
                 self.menor_distancia_direita = i
 
+        if dist_ladodir < dist_ladoesq:
+            self.val_menor_distancia_lados = dist_ladodir
+        else:
+            self.val_menor_distancia_lados = dist_ladoesq
+
         #Loop que calcula o angulo da menor distancia a frente esquerda
-        dist_esq = msg.ranges[0]
-        self.menor_distancia_frente_esquerda = 0
-        for i in range(0,30):
+        dist_esq = 100000
+        self.menor_distancia_frente_esquerda = -1
+        for i in range(0 + self.bandeira_coletada,30):
             if msg.ranges[i] < dist_esq:
                 dist_esq = msg.ranges[i]
                 self.menor_distancia_frente_esquerda = i
         
         #Loop que calcula a menor distancia a frente direita
-        dist_dir = msg.ranges[330]
-        self.menor_distancia_frente_direita = 330
-        for i in range(330,360):
+        dist_dir = 100000
+        self.menor_distancia_frente_direita = -1
+        for i in range(330,360 - self.bandeira_coletada):
             if msg.ranges[i] < dist_dir:
                 dist_dir = msg.ranges[i]
                 self.menor_distancia_frente_direita = i
 
         # Caso observe obstaculos em ambos os lados:
-        if distancias_frente_direita and min(distancias_frente_direita) < self.const_dist_obstaculo and distancias_frente_esquerda and min(distancias_frente_esquerda) < self.const_dist_obstaculo:
+        if distancias_frente_direita and dist_dir < self.const_dist_obstaculo and distancias_frente_esquerda and dist_esq < self.const_dist_obstaculo:
             # Se a menor distancia estiver a esquerda:
-            if min(distancias_frente_esquerda) < min(distancias_frente_direita):
+            if dist_esq < dist_dir:
                 # Define que o obstaculo esta a esquerda
                 self.direcao_obstaculo = -1
-                self.distancia_frente = min(distancias_frente_esquerda)
+                self.distancia_frente = dist_esq
             # Caso a menor distancia estiver a direita
             else:
                 # Define que o obstaculo esta a direita
                 self.direcao_obstaculo = 1
-                self.distancia_frente = min(distancias_frente_direita)
-
+                self.distancia_frente = dist_dir
             #Define que existe obstaculo a frente
             self.obstaculo_a_frente = True
 
         # Caso so hajam obstaculos a esquerda
-        elif distancias_frente_esquerda and min(distancias_frente_esquerda) < self.const_dist_obstaculo:
+        elif distancias_frente_esquerda and dist_esq < self.const_dist_obstaculo:
             # Define que o obstaculo esta a esquerda
-            self.distancia_frente = min(distancias_frente_esquerda)
+            self.distancia_frente = dist_esq
             self.obstaculo_a_frente = True
             self.direcao_obstaculo = -1
 
         # Caso so hajam obstaculos a direita
-        elif distancias_frente_direita and min(distancias_frente_direita) < self.const_dist_obstaculo:
+        elif distancias_frente_direita and dist_dir < self.const_dist_obstaculo:
             # Define que o obstaculo esta a direita
-            self.distancia_frente = min(distancias_frente_direita)
+            self.distancia_frente = dist_dir
             self.obstaculo_a_frente = True
             self.direcao_obstaculo = 1
 
@@ -155,9 +186,50 @@ class ControleRobo(Node):
     def imu_callback(self, msg: Imu):
         pass
 
+
     def odom_callback(self, msg: Odometry):
-        # Mensagens de Odometria das rodas!
-        pass
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+
+        q = msg.pose.pose.orientation
+
+        theta = np.arctan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        )
+
+        self.x = x
+        self.y = y
+        self.theta = theta
+
+        # Salva a posição inicial como base
+        if not self.base_salvada:
+            self.base_x = x
+            self.base_y = y
+            self.base_theta = theta
+            self.base_salvada = True
+            print(self.base_x, self.base_y)
+
+
+    def abrir_garra(self):
+        msg = Float64MultiArray()
+        msg.data = [0.0, -0.06, 0.06]
+        self.gripper_pub.publish(msg)
+
+    def fechar_garra(self):
+        msg = Float64MultiArray()
+        msg.data = [0.0, 0.0, 0.0]
+        self.gripper_pub.publish(msg)
+
+    def levantar_garra(self):
+        msg = Float64MultiArray()
+        msg.data = [-0.2, 0.0, 0.0]
+        self.gripper_pub.publish(msg)
+
+    def abaixar_garra(self):
+        msg = Float64MultiArray()
+        msg.data = [0.0, 0.0, 0.0]
+        self.gripper_pub.publish(msg)
 
     # FUNCAO QUE RECEBE OS DADOS DO LIDAR
     def camera_callback(self, msg: Image):
@@ -261,16 +333,24 @@ class ControleRobo(Node):
 
         # Printa o estado atual do robo no terminal
         if self.estado_atual == ESTADOS.EXPLORANDO: self.get_logger().info("EXPLORANDO")
-        if self.estado_atual == ESTADOS.BANDEIRA_ENCONTRADA: self.get_logger().info("BANDEIRA_ENCONTRADA") 
-        if self.estado_atual == ESTADOS.INDO_PARA_BANDEIRA: self.get_logger().info("INDO_PARA_BANDEIRA") 
-        if self.estado_atual == ESTADOS.POSICIONANDO_NA_BANDEIRA: self.get_logger().info("POSICIONANDO_NA_BANDEIRA")
-        if self.estado_atual == ESTADOS.DESVIANDO: self.get_logger().info("DESVIANDO")
+        elif self.estado_atual == ESTADOS.BANDEIRA_ENCONTRADA: self.get_logger().info("BANDEIRA_ENCONTRADA") 
+        elif self.estado_atual == ESTADOS.INDO_PARA_BANDEIRA: self.get_logger().info("INDO_PARA_BANDEIRA") 
+        elif self.estado_atual == ESTADOS.POSICIONANDO_NA_BANDEIRA: self.get_logger().info("POSICIONANDO_NA_BANDEIRA")
+        elif self.estado_atual == ESTADOS.DESVIANDO: self.get_logger().info("DESVIANDO")
+        elif self.estado_atual == ESTADOS.ABRINDO_GARRA: self.get_logger().info("ABRINDO_GARRA")
+        elif self.estado_atual == ESTADOS.PEGANDO_BANDEIRA: self.get_logger().info("PEGANDO_BANDEIRA")
+        elif self.estado_atual == ESTADOS.FECHANDO_GARRA: self.get_logger().info("FECHANDO_GARRA")
+        elif self.estado_atual == ESTADOS.LEVANTANDO_GARRA: self.get_logger().info("LEVANTANDO_GARRA")
+        elif self.estado_atual == ESTADOS.VOLTANDO_PARA_BASE: self.get_logger().info("VOLTANDO_PARA_BASE")
+        elif self.estado_atual == ESTADOS.DESVIANDO_VOLTANDO_PARA_BASE: self.get_logger().info("DESVIANDO_VOLTANDO_PARA_BASE")
+        elif self.estado_atual == ESTADOS.ABAIXANDO_GARRA: self.get_logger().info("ABAIXANDO_GARRA")
+        elif self.estado_atual == ESTADOS.ABRINDO_GARRA_FINAL: self.get_logger().info("ABRINDO_GARRA_FINAL")
+        elif self.estado_atual == ESTADOS.DANDO_RE: self.get_logger().info("DANDO_RE")
+        elif self.estado_atual == ESTADOS.FECHANDO_GARRA_FINAL: self.get_logger().info("FECHANDO_GARRA_FINAL")
+        elif self.estado_atual == ESTADOS.PARADO: self.get_logger().info("PARADO")
+
 
         twist = Twist()
-        
-        # Muda para o estado "POSICIONANDO_NA_BANDEIRA" quando percebe que chegou na bandeira
-        if self.chegou_na_bandeira and self.obstaculo_a_frente:
-            self.estado_atual = ESTADOS.POSICIONANDO_NA_BANDEIRA
 
 
         # CASO ESTEJA NO ESTADO "EXPLORANDO"
@@ -301,6 +381,11 @@ class ControleRobo(Node):
         # CASO ESTEJA NO ESTADO "BANDEIRA_ENCONTRADA"
         # Percebeu visualmente na camera algum pixel da bandeira
         elif self.estado_atual == ESTADOS.BANDEIRA_ENCONTRADA:
+
+            # Muda para o estado "POSICIONANDO_NA_BANDEIRA" quando percebe que chegou na bandeira
+            if self.chegou_na_bandeira and self.obstaculo_a_frente:
+                self.estado_atual = ESTADOS.POSICIONANDO_NA_BANDEIRA
+
             # Volta para o estado "EXPLORANDO" caso perca a bandeira no processo
             if self.pos_x_bandeira == None:
                 self.estado_atual = ESTADOS.EXPLORANDO
@@ -322,8 +407,12 @@ class ControleRobo(Node):
         # A bandeira esta em vista e ele vai reto em direcao a bandeira
         elif self.estado_atual == ESTADOS.INDO_PARA_BANDEIRA:
 
+            # Muda para o estado "POSICIONANDO_NA_BANDEIRA" quando percebe que chegou na bandeira
+            if self.chegou_na_bandeira and self.obstaculo_a_frente:
+                self.estado_atual = ESTADOS.POSICIONANDO_NA_BANDEIRA
+
             # Caso nao tenham obstaculos a frente
-            if not self.obstaculo_a_frente:
+            elif not self.obstaculo_a_frente:
                 # Caso a bandeira saia do centro da imagem, volta para o estado "BANDEIRA_ENCONTRADA"
                 if self.pos_x_bandeira != None and not (self.pos_x_bandeira < self.centro_x + self.dx and self.pos_x_bandeira > self.centro_x - self.dx):
                     self.estado_atual = ESTADOS.BANDEIRA_ENCONTRADA
@@ -428,10 +517,175 @@ class ControleRobo(Node):
                 twist.linear.x = -0.1
             # Caso o mastro esteja no centro da imagem, fica parado
             else:
+                self.estado_atual = ESTADOS.ABRINDO_GARRA
                 twist.linear.x = 0.0
                 twist.linear.y = 0.0
                 twist.angular.z = 0.0
+        
+        elif self.estado_atual == ESTADOS.ABRINDO_GARRA:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.PEGANDO_BANDEIRA
+            else:
+                self.contador_garra -= 1
+            self.abrir_garra()
+        
+        elif self.estado_atual == ESTADOS.PEGANDO_BANDEIRA:
+            if self.distancia_frente > 0.45:
+                twist.linear.x = 0.1
+            else:
+                self.estado_atual = ESTADOS.FECHANDO_GARRA
+        
+        elif self.estado_atual == ESTADOS.FECHANDO_GARRA:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.LEVANTANDO_GARRA
+            else:
+                self.contador_garra -= 1
+            self.fechar_garra()
+        
+        elif self.estado_atual == ESTADOS.LEVANTANDO_GARRA:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE
+                self.bandeira_coletada = 10
+            else:
+                self.contador_garra -= 1
+            self.levantar_garra()
 
+        elif self.estado_atual == ESTADOS.VOLTANDO_PARA_BASE:
+
+            if self.obstaculo_a_frente:
+                self.estado_atual = ESTADOS.DESVIANDO_VOLTANDO_PARA_BASE
+            
+            else:
+                dx = self.base_x - self.x
+                dy = self.base_y - self.y
+
+                distancia = np.sqrt(dx**2 + dy**2)
+
+                # Já chegou na base
+                if distancia < 0.7:
+                    twist.linear.x = 0.0
+                    twist.angular.z = 0.0
+
+                    self.estado_atual = ESTADOS.ABAIXANDO_GARRA
+                    return
+
+                # Ângulo em direção à base
+                angulo_base = np.arctan2(dy, dx)
+
+                # Erro angular normalizado para [-pi, pi]
+                erro_angular = np.arctan2(
+                    np.sin(angulo_base - self.theta),
+                    np.cos(angulo_base - self.theta)
+                )
+
+                if self.val_menor_distancia_lados < 0.3:
+                    twist.linear.x = 0.5
+                # Primeiro gira, depois anda
+                elif abs(erro_angular) > 0.1:
+                    twist.linear.x = 0.0
+                    twist.angular.z = 0.3 * erro_angular/abs(erro_angular)
+                else:
+                    twist.linear.x = 0.5
+                    twist.angular.z = 0.0
+
+        elif self.estado_atual == ESTADOS.DESVIANDO_VOLTANDO_PARA_BASE:
+            dx = self.base_x - self.x
+            dy = self.base_y - self.y
+
+            distancia = np.sqrt(dx**2 + dy**2)
+
+            # Já chegou na base
+            if distancia < 0.7:
+                twist.linear.x = 0.0
+                twist.angular.z = 0.0
+
+                self.estado_atual = ESTADOS.ABAIXANDO_GARRA
+                return
+
+            # Caso o obstaculo nao esteja mais a frente
+            if not self.obstaculo_a_frente:
+
+                # Caso o obstaculo esteja a esquerda
+                if self.direcao_obstaculo == -1:
+                    # Avalia se a menor distancia a esquerda, ainda esta a menos de 90°, vai pra frente
+                    if self.menor_distancia_esquerda < 90:
+                        twist.linear.x = 0.5
+                    # Caso ja esteja a mais de 90°
+                    else:
+                        self.direcao_obstaculo = 0          # Define que nao existe mais obstaculo
+                        self.giro_desvio = 1                # Define o giro de desvio para a direita
+                        twist.angular.z = 0.3               # Comeca a girar
+                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado "INDO_PARA_BANDEIRA"
+
+                # Caso o obstaculo esteja a direita
+                elif self.direcao_obstaculo == 1:
+                    # Avalia se a menor distancia a direita, ainda esta a menos de 90°, vai pra frente
+                    if self.menor_distancia_direita > 270:
+                        twist.linear.x = 0.5
+                    # Caso ja esteja a mais de -90°
+                    else:
+                        self.direcao_obstaculo = 0          # Define que nao existe mais obstaculo
+                        self.giro_desvio = -1               # Define o giro de desvio para a esquerda
+                        twist.angular.z = -0.3              # Comeca a girar
+                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado "INDO_PARA_BANDEIRA"
+                        
+            # Caso o obstaculo ainda esteja a frente
+            else:
+                # Gira para o lado contrario ao lado que o obstaculo esta
+                if self.direcao_obstaculo == -1:
+                    twist.angular.z = -0.3
+                elif self.direcao_obstaculo == 1:
+                    twist.angular.z = 0.3
+
+        elif self.estado_atual == ESTADOS.ABAIXANDO_GARRA:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.ABRINDO_GARRA_FINAL
+            else:
+                self.contador_garra -= 1
+            self.abaixar_garra()
+        
+        elif self.estado_atual == ESTADOS.ABRINDO_GARRA_FINAL:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.DANDO_RE
+            else:
+                self.contador_garra -= 1
+            self.abrir_garra()
+        
+        elif self.estado_atual == ESTADOS.DANDO_RE:
+            self.bandeira_coletada = 0
+            if self.distancia_frente < 0.7:
+                twist.linear.x = -0.1
+            else:
+                self.estado_atual = ESTADOS.FECHANDO_GARRA_FINAL
+
+        elif self.estado_atual == ESTADOS.FECHANDO_GARRA_FINAL:
+            if self.contador_garra == -1:
+                self.contador_garra = 10
+            elif self.contador_garra == 0:
+                self.contador_garra = -1
+                self.estado_atual = ESTADOS.PARADO
+            else:
+                self.contador_garra -= 1
+            self.fechar_garra()
+
+        elif self.estado_atual == ESTADOS.PARADO:
+            twist.linear.x = 0.0
+        
 
         self.cmd_vel_pub.publish(twist)
 

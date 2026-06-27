@@ -37,6 +37,20 @@ rosdep install --from-paths src --ignore-src -r -y
 
 ---
 
+## Download
+
+Navegue até a pasta do workspace:
+
+```bash
+cd ~/seu_workspace
+```
+
+Execute o comando para clone:
+
+```bash
+git clone https://github.com/EduardoAPaiva/Trabalho-PRM-PegaBandeiras pega_bandeiras
+```
+
 ## Execução
 
 Abra **três terminais** e siga os passos abaixo.
@@ -108,7 +122,7 @@ source install/setup.bash
 Execute o nó de controle:
 
 ```bash
-ros2 run pega_bandeiras controle_robo.py
+ros2 run pega_bandeiras controle_robo
 ```
 
 ---
@@ -137,7 +151,7 @@ ros2 launch pega_bandeiras carrega_robo.launch.py
 ```bash
 cd ~/seu_workspace
 source install/setup.bash
-ros2 run pega_bandeiras controle_robo.py
+ros2 run pega_bandeiras controle_robo
 ```
 
 ---
