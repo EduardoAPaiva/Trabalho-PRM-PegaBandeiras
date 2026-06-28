@@ -7,7 +7,7 @@
 
 ## Arquitetura
 
-O robô foi programado utilizando uma arquitetura baseada em um mapa de estados. A seguir estão os cinco estados possíveis e uma breve explicação para cada um:
+O robô foi programado utilizando uma arquitetura baseada em um mapa de estados. A seguir estão os dezesseis estados possíveis e uma breve explicação para cada um:
 
 - EXPLORANDDO - Nesse estado, o robô ainda não enxergou a bandeira. Portanto, ele anda sempre para frente desviando de qualquer obstáculo que ele enxergar até encontrar a bandeira. Indepentemente do estado atual do robô, caso ele perca a bandeira de vista ele retorna a esse estado.
 
@@ -17,7 +17,29 @@ O robô foi programado utilizando uma arquitetura baseada em um mapa de estados.
 
 - DESVIANDO - Nesse estado, o robô enxergou um obstáculo. Portanto, ele vira para o lado oposto do qual enxergou o objeto até o objeto sair da frente. Avança até passar pelo objeto e começa a girar de volta para o lado da bandeira até reencontrá-la. Caso perca a bandeira de vista, volta para o estado EXPLORANDO.
 
-- POSICIONANDOO_NA_BANDEIRA - Avalia se a imagem já tem uma porcentagem suficiente da bandeira. Dessa forma, começa a alinhar o robô corretamente com o mastro da bandeira, ficando completamente na direção correta e numa distância suficiente.
+- POSICIONANDOO_NA_BANDEIRA - Avalia se a imagem já tem uma porcentagem suficiente da bandeira. Dessa forma, começa a alinhar o robô corretamente com o mastro da bandeira, ficando completamente na direção correta e numa distância suficiente. Então, altera para o estado de ABRINDO_GARRA.
+
+- ABRINDO_GARRA - Nesse estado, o robô abre a garra por um tempo determinado (suficiente para que a garra abra todo o necessário). Após isso, alterna o estado para PEGANDO_BANDEIRA.
+
+- PEGANDO_BANDEIRA - Nesse estado, a garra está aberta e o robô avança até que esteja a uma distância em que a bandeira se encontre no centro da garra. Dessa forma, altera o estado para FECHANDO_GARRA.
+
+- FECHANDO_GARRA - De maneira semelhante ao estado de ABRINDO_GARRA, fecha a garra por um tempo determinado. Então, altera para o estado de LEVANTANDO_GARRA.
+
+- LEVANTANDO_GARRA - Nesse estado, o robô levanta a garra para evitar que a bandeira se arraste no chão e também não fique presa nos relevos do ambiente. Dessa forma, finalmente considera que a bandeira foi coletada e então avança para o estado de VOLTANDO_PARA_BASE.
+
+- VOLTANDO_PARA_BASE - Agora, o robô, que assim que iniciou o controle salvou a coordenada de onde saiu, precisa voltar para onde veio. Dessa forma, ele direciona o ângulo para a coordenada da base e avança em linha reta. Caso encontre algum obstáculo no caminho, altera para o estado de DESVIANDO_VOLTANDO_PARA_BASE. Caso consiga realmente chegar a uma distância menor que o que já é considerado como estando na base, altera para o estado de ABAIXANDO_GARRA.
+
+- DESVIANDO_VOLTANDO_PARA_BASE - Possui uma lógica extremamente semelhante ao estado de DESVIANDO. Nesse estado, caso consiga desviar do obstáculo, retorna para o estado de VOLTANDO_PARA_BASE. Por outro lado, caso, nesse desvio, já esteja em uma posição considerada como dentro da base, já altera diretamente para o estado de ABAIXANDO_GARRA.
+
+- ABAIXANDO_GARRA - Nesse estado, de maneira semelhante ao LEVANTANDO_GARRA, o robô possui um contador de um tempo determinado em que ele abaixa a garra para devolver a bandeira para o local certo. Após isso, altera para o estado de ABRINDO_GARRA_FINAL.
+
+- ABRINDO_GARRA_FINAL - De maneira semelhante ao estado de ABRINDO_GARRA, o robô abre a garra novamente para deixar a bandeira. A partir desse estado, a bandeira já não é mais considerada coletada pelo robô. Depois disso, o próximo estado é DANDO_RE.
+
+- DANDO_RE - Nesse estado, o robô começa a andar para trás para se afastar da bandeira que já está posicionada no local certo. O robô se afasta até que a distância até a bandeira seja maior que um limiar adotado. Após esse estado, o seguinte é o FECHANDO_GARRA_FINAL.
+
+- FECHANDO_GARRA_FINAL - Nesse estado, de maneira semelhante ao estado de FECHANDO_GARRA, o robô possui um contador com um tempo determinado em que ele fecha a garra para o estado original. Dessa forma, avança para o próximo e último estado, sendo o PARADO.
+
+- PARADO - Nesse estado, o robô não faz mais nada. Ele fica preso nesse estado sem poder se alterar para outros. Além disso, o robô recebe os comando para não realizar nada. Esse estado representa que o controle do robô foi encerrado.
 
 ## Slides para apresentação
 

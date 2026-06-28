@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from enum import Enum
 
-# O ROBO TRANSITA ENTRE OS CINCO ESTADOS POSSIVEIS:
+# O ROBO TRANSITA ENTRE OS 16 ESTADOS POSSIVEIS:
 class ESTADOS(Enum):
     EXPLORANDO = 1
     BANDEIRA_ENCONTRADA = 2
@@ -78,7 +78,7 @@ class ControleRobo(Node):
         self.estado_atual = ESTADOS.EXPLORANDO      # Estado atual do robo na maquina de estados
         self.chegou_na_bandeira = False             # Vira true quando uma certa portagem da bandeira ocupa a tela
         self.giro_desvio = 0                        # Define se o robo esta girando para desvio de algum obstaculo
-        self.val_menor_distancia_lados = -1
+        self.val_menor_distancia_lados = -1         # Valor da menor distancia encontrada ao lado do robo
 
         self.const_dist_obstaculo = 0.8             # Constante que define a distancia minima para um obstaculo
 
@@ -90,12 +90,12 @@ class ControleRobo(Node):
         self.dx = 20                                # Tolerancia em pixels para considerar a bandeira no centro da imagem
         self.dx_mastro = 3                          # Tolerancia em pixels para considerar o mastro da bandeira no centro da imagem
 
-        self.contador_garra = -1
-        self.bandeira_coletada = 0
+        self.contador_garra = -1                    # Contador utilizado em alguns momentos para movimentos da garra
+        self.bandeira_coletada = 0                  # Variavel que define se a bandeira esta coletada ou nao
 
-        self.base_x = 0
-        self.base_y = 0
-        self.base_salvada = False
+        self.base_x = 0                             # Coordenada x da base (posicao inicial do robo)
+        self.base_y = 0                             # Coordenada y da base (posicao inicial do robo)
+        self.base_salvada = False                   # Variavel auxiliar para definir se a coordenada da base ja foi salva
 
     # FUNCAO QUE RECEBE OS DADOS DO LIDAR
     def scan_callback(self, msg: LaserScan):
@@ -186,23 +186,27 @@ class ControleRobo(Node):
     def imu_callback(self, msg: Imu):
         pass
 
-
+    # FUNCAO QUE RECEBE OS VALORES DA ODOMETRIA
     def odom_callback(self, msg: Odometry):
+        # Recebe as coordenadas x e y da odometria
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
+        # Recebe a orientacao inicial do robo
         q = msg.pose.pose.orientation
 
+        # Calcula o angulo a partir da orientacao
         theta = np.arctan2(
             2.0 * (q.w * q.z + q.x * q.y),
             1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         )
 
+        # Salva as coordenadas nas variaveis internas do robo
         self.x = x
         self.y = y
         self.theta = theta
 
-        # Salva a posição inicial como base
+        # Caso seja a primeira medicao da odometria, salva a posicao como a base
         if not self.base_salvada:
             self.base_x = x
             self.base_y = y
@@ -210,22 +214,25 @@ class ControleRobo(Node):
             self.base_salvada = True
             print(self.base_x, self.base_y)
 
-
+    # Funcao que abre a garra 
     def abrir_garra(self):
         msg = Float64MultiArray()
         msg.data = [0.0, -0.06, 0.06]
         self.gripper_pub.publish(msg)
 
+    # Funcao que fecha a garra
     def fechar_garra(self):
         msg = Float64MultiArray()
         msg.data = [0.0, 0.0, 0.0]
         self.gripper_pub.publish(msg)
 
+    # Funcao que levanta a garra
     def levantar_garra(self):
         msg = Float64MultiArray()
-        msg.data = [-0.2, 0.0, 0.0]
+        msg.data = [-0.3, 0.0, 0.0]
         self.gripper_pub.publish(msg)
 
+    # Funcao que abaixa a garra
     def abaixar_garra(self):
         msg = Float64MultiArray()
         msg.data = [0.0, 0.0, 0.0]
@@ -522,71 +529,86 @@ class ControleRobo(Node):
                 twist.linear.y = 0.0
                 twist.angular.z = 0.0
         
+        # CASO ESTEJA NO ESTADO "ABRINDO_GARRA"
+        # Um contador e utilizado de 10 a 0 para garantir que o robo tenha tempo de realizar a determinada funcao
+        # Quando o contador zera, o robo passa para o proximo estado
+        # Essa logica e utilizada varias vezes daqui pra frente
         elif self.estado_atual == ESTADOS.ABRINDO_GARRA:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
-                self.estado_atual = ESTADOS.PEGANDO_BANDEIRA
+                # Quando o timer acabar, vai para o estado de pegar a bandeira
+                self.estado_atual = ESTADOS.PEGANDO_BANDEIRA    
             else:
                 self.contador_garra -= 1
             self.abrir_garra()
         
+        # CASO ESTEJA NO ESTADO "PEGANDO_BANDEIRA"
+        # Coloca as garas em volta da bandeira para pega-la
         elif self.estado_atual == ESTADOS.PEGANDO_BANDEIRA:
-            if self.distancia_frente > 0.45:
+            # Se ainda nao esta perto suficiente, chega mais proximo da bandeira
+            if self.distancia_frente > 0.45:                
                 twist.linear.x = 0.1
+            # Quando esta proximo suficiente, entra no modo de fechar a garra
             else:
-                self.estado_atual = ESTADOS.FECHANDO_GARRA
+                self.estado_atual = ESTADOS.FECHANDO_GARRA  
         
+        # CASO ESTEJA NO ESTADO "FECHANDO_GARRA"
+        # Fecha a garra, segurando a bandeira
         elif self.estado_atual == ESTADOS.FECHANDO_GARRA:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
+                #Quando o timer acabar, entra no estado para levantar a garra
                 self.estado_atual = ESTADOS.LEVANTANDO_GARRA
             else:
                 self.contador_garra -= 1
             self.fechar_garra()
-        
+
+        # CASO ESTEJA NO ESTADO "LEVANTANDO_GARRA"
+        # Levanta a bandeira pega, podendo levar de volta para a base
         elif self.estado_atual == ESTADOS.LEVANTANDO_GARRA:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
+                # Quando o timer acaba, entra no estado de voltar para a base
                 self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE
                 self.bandeira_coletada = 10
             else:
                 self.contador_garra -= 1
             self.levantar_garra()
 
+        # CASO ESTEJA NO ESTADO "VOLTANDO_PARA_BASE"
+        # A posicao da base foi salva no comeco
+        # Com a bandeira pega, volta para a base relacionando sua posicao atual com a posicao da base
         elif self.estado_atual == ESTADOS.VOLTANDO_PARA_BASE:
-
+            # Entra no modo de desvio se encontrar um obstaculo no caminho
             if self.obstaculo_a_frente:
                 self.estado_atual = ESTADOS.DESVIANDO_VOLTANDO_PARA_BASE
-            
             else:
+                # Relaciona sua posicao atual com a da base nos eixos X e Y
                 dx = self.base_x - self.x
                 dy = self.base_y - self.y
-
+                # Calcula o modulo para saber a distancia entre ele e a base e armazena em uma variavel
                 distancia = np.sqrt(dx**2 + dy**2)
-
-                # Já chegou na base
+                # Caso tenha chego na base
                 if distancia < 0.7:
+                    # O robo para de se mexer 
                     twist.linear.x = 0.0
                     twist.angular.z = 0.0
-
+                    # Entra no estado de abaixar a garra
                     self.estado_atual = ESTADOS.ABAIXANDO_GARRA
                     return
-
-                # Ângulo em direção à base
+                # Calcula o angulo com a base e armazena em uma variavel
                 angulo_base = np.arctan2(dy, dx)
-
-                # Erro angular normalizado para [-pi, pi]
+                # Calcula o erro angular 
                 erro_angular = np.arctan2(
                     np.sin(angulo_base - self.theta),
                     np.cos(angulo_base - self.theta)
                 )
-
                 if self.val_menor_distancia_lados < 0.3:
                     twist.linear.x = 0.5
                 # Primeiro gira, depois anda
@@ -597,17 +619,20 @@ class ControleRobo(Node):
                     twist.linear.x = 0.5
                     twist.angular.z = 0.0
 
+        # CASO ESTEJA NO ESTADO "DESVIANDO_VOLTANDO_PARA_BASE"
+        # Desvia do obstaculo da mesma forma que desvia procurando a bandeira
         elif self.estado_atual == ESTADOS.DESVIANDO_VOLTANDO_PARA_BASE:
             dx = self.base_x - self.x
             dy = self.base_y - self.y
 
             distancia = np.sqrt(dx**2 + dy**2)
 
-            # Já chegou na base
+            # Caso tenha chego na base
             if distancia < 0.7:
+                # O robo para de se mexer
                 twist.linear.x = 0.0
                 twist.angular.z = 0.0
-
+                # Entra no estado de abaixar a garra
                 self.estado_atual = ESTADOS.ABAIXANDO_GARRA
                 return
 
@@ -616,7 +641,7 @@ class ControleRobo(Node):
 
                 # Caso o obstaculo esteja a esquerda
                 if self.direcao_obstaculo == -1:
-                    # Avalia se a menor distancia a esquerda, ainda esta a menos de 90°, vai pra frente
+                    # Vai pra frente enquanto o obstaculo esta a menos de 90°
                     if self.menor_distancia_esquerda < 90:
                         twist.linear.x = 0.5
                     # Caso ja esteja a mais de 90°
@@ -624,11 +649,11 @@ class ControleRobo(Node):
                         self.direcao_obstaculo = 0          # Define que nao existe mais obstaculo
                         self.giro_desvio = 1                # Define o giro de desvio para a direita
                         twist.angular.z = 0.3               # Comeca a girar
-                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado "INDO_PARA_BANDEIRA"
+                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado de voltar para a base
 
                 # Caso o obstaculo esteja a direita
                 elif self.direcao_obstaculo == 1:
-                    # Avalia se a menor distancia a direita, ainda esta a menos de 90°, vai pra frente
+                    # Vai pra frente enquanto o obstaculo esta a mais de -90°
                     if self.menor_distancia_direita > 270:
                         twist.linear.x = 0.5
                     # Caso ja esteja a mais de -90°
@@ -636,7 +661,7 @@ class ControleRobo(Node):
                         self.direcao_obstaculo = 0          # Define que nao existe mais obstaculo
                         self.giro_desvio = -1               # Define o giro de desvio para a esquerda
                         twist.angular.z = -0.3              # Comeca a girar
-                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado "INDO_PARA_BANDEIRA"
+                        self.estado_atual = ESTADOS.VOLTANDO_PARA_BASE      # Volta para o estado de voltar para a base
                         
             # Caso o obstaculo ainda esteja a frente
             else:
@@ -646,47 +671,59 @@ class ControleRobo(Node):
                 elif self.direcao_obstaculo == 1:
                     twist.angular.z = 0.3
 
+        # CASO ESTEJA NO ESTADO "ABAIXANDO_GARRA"
+        # Depois que chegou na base, abaixa a bandeira para coloca-la
         elif self.estado_atual == ESTADOS.ABAIXANDO_GARRA:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
+                # Quando o timer acaba, entra no estado de abrir a garra
                 self.estado_atual = ESTADOS.ABRINDO_GARRA_FINAL
             else:
                 self.contador_garra -= 1
             self.abaixar_garra()
         
+        # CASO ESTEJA NO ESTADO "ABRINDO_GARRA_FINAL"
+        # Com a bandeira colocada, abre a garra para solta-la
         elif self.estado_atual == ESTADOS.ABRINDO_GARRA_FINAL:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
+                # Quando o timer acaba, entra no estado de dar re
                 self.estado_atual = ESTADOS.DANDO_RE
             else:
                 self.contador_garra -= 1
             self.abrir_garra()
         
+        # CASO ESTEJA NO ESTADO "DANDO_RE"
+        # Com a bandeira devidamente posicionada na base, da re para poder fechar a garra e terminar a rotina
         elif self.estado_atual == ESTADOS.DANDO_RE:
             self.bandeira_coletada = 0
+            # Vai para tras ate a distancia com a bandeira atingir um valor minimo
             if self.distancia_frente < 0.7:
                 twist.linear.x = -0.1
             else:
                 self.estado_atual = ESTADOS.FECHANDO_GARRA_FINAL
 
+        # CASO ESTEJA NO ESTADO "FECHANDO_GARRA_FINAL"
+        # Fecha a garra para concluir sua rotina
         elif self.estado_atual == ESTADOS.FECHANDO_GARRA_FINAL:
             if self.contador_garra == -1:
                 self.contador_garra = 10
             elif self.contador_garra == 0:
                 self.contador_garra = -1
+                # Quando o timer acaba, entra no estado de parado
                 self.estado_atual = ESTADOS.PARADO
             else:
                 self.contador_garra -= 1
             self.fechar_garra()
 
+        # CASO ESTEJA NO ESTADO "PARADO"
+        # Com a rotina terminada, o robo para
         elif self.estado_atual == ESTADOS.PARADO:
             twist.linear.x = 0.0
-        
-
         self.cmd_vel_pub.publish(twist)
 
 def main(args=None):
